@@ -1,0 +1,6 @@
+{
+  "name": "ETEBOX Video Watermark",
+  "description": "High-performance video watermarking web application with animated watermark movements, multi-video queue, live preview, and admin control panel.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
