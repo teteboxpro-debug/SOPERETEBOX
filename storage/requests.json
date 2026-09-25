@@ -1,0 +1,11 @@
+{
+  "test_client_2": {
+    "id": "req_test_client_2",
+    "userId": "test_client_2",
+    "username": "Abdalrhman VIP",
+    "ip": "127.0.0.1",
+    "reason": "Watermark production",
+    "status": "pending",
+    "requestDate": "2026-09-25T19:28:10.237Z"
+  }
+}

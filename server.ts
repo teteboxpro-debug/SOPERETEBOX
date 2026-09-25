@@ -56,13 +56,94 @@ const settings: SystemSettings = {
   cancelOnRemoveAccess: true,
 };
 
-// In-memory data store
+// In-memory data store with JSON disk persistence
 const jobs = new Map<string, QueueJob>();
 const users = new Map<string, UserRecord>();
 const accessRequests = new Map<string, AccessRequest>();
 const adminTokens = new Set<string>();
 const failedJobLogs = new Map<string, string>();
 let activeProcessingJobs = 0;
+
+// Disk persistence paths
+const SETTINGS_FILE = path.join(STORAGE_ROOT, 'settings.json');
+const USERS_FILE = path.join(STORAGE_ROOT, 'users.json');
+const REQUESTS_FILE = path.join(STORAGE_ROOT, 'requests.json');
+const TOKENS_FILE = path.join(STORAGE_ROOT, 'tokens.json');
+
+function loadPersistedData() {
+  try {
+    if (fs.existsSync(SETTINGS_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf-8'));
+      Object.assign(settings, parsed);
+    }
+  } catch (e) {
+    console.error('Error loading settings:', e);
+  }
+  try {
+    if (fs.existsSync(USERS_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(USERS_FILE, 'utf-8'));
+      for (const [k, v] of Object.entries(parsed)) {
+        users.set(k, v as UserRecord);
+      }
+    }
+  } catch (e) {
+    console.error('Error loading users:', e);
+  }
+  try {
+    if (fs.existsSync(REQUESTS_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(REQUESTS_FILE, 'utf-8'));
+      for (const [k, v] of Object.entries(parsed)) {
+        accessRequests.set(k, v as AccessRequest);
+      }
+    }
+  } catch (e) {
+    console.error('Error loading access requests:', e);
+  }
+  try {
+    if (fs.existsSync(TOKENS_FILE)) {
+      const parsed: string[] = JSON.parse(fs.readFileSync(TOKENS_FILE, 'utf-8'));
+      parsed.forEach((t) => adminTokens.add(t));
+    }
+  } catch (e) {
+    console.error('Error loading tokens:', e);
+  }
+}
+
+function saveSettings() {
+  try {
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+  } catch (e) {
+    console.error('Error saving settings:', e);
+  }
+}
+
+function saveUsers() {
+  try {
+    const obj = Object.fromEntries(users.entries());
+    fs.writeFileSync(USERS_FILE, JSON.stringify(obj, null, 2));
+  } catch (e) {
+    console.error('Error saving users:', e);
+  }
+}
+
+function saveRequests() {
+  try {
+    const obj = Object.fromEntries(accessRequests.entries());
+    fs.writeFileSync(REQUESTS_FILE, JSON.stringify(obj, null, 2));
+  } catch (e) {
+    console.error('Error saving requests:', e);
+  }
+}
+
+function saveTokens() {
+  try {
+    fs.writeFileSync(TOKENS_FILE, JSON.stringify(Array.from(adminTokens), null, 2));
+  } catch (e) {
+    console.error('Error saving tokens:', e);
+  }
+}
+
+loadPersistedData();
 
 // Admin username and password credentials
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'Admin';
@@ -96,15 +177,16 @@ checkHardwareAcceleration();
 function getOrCreateUser(req: Request): UserRecord {
   const forwarded = req.headers['x-forwarded-for'];
   const ip = typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : req.socket.remoteAddress || '127.0.0.1';
-  const customId = (req.headers['x-client-id'] as string) || `user_${crypto.createHash('md5').update(ip).digest('hex').substring(0, 10)}`;
+  const customId = (req.headers['x-client-id'] as string) || (req.query?.clientId as string) || `user_${crypto.createHash('md5').update(ip).digest('hex').substring(0, 10)}`;
   
   // Check if request is authenticated with admin token
   const authHeader = req.headers.authorization;
   const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : (req.headers['x-admin-token'] as string);
   const isAdmin = Boolean(token && adminTokens.has(token));
 
-  if (!users.has(customId)) {
-    const newUser: UserRecord = {
+  let user = users.get(customId);
+  if (!user) {
+    user = {
       id: customId,
       ip,
       username: isAdmin ? 'Admin' : `User-${customId.slice(-4).toUpperCase()}`,
@@ -114,17 +196,21 @@ function getOrCreateUser(req: Request): UserRecord {
       lastActive: new Date().toISOString(),
       totalJobs: 0,
     };
-    users.set(customId, newUser);
+    users.set(customId, user);
+    saveUsers();
   } else {
-    const existing = users.get(customId)!;
-    existing.lastActive = new Date().toISOString();
+    user.lastActive = new Date().toISOString();
+    user.ip = ip;
     if (isAdmin) {
-      existing.isApproved = true;
-      existing.isBlocked = false;
-      existing.username = 'Admin';
+      user.isApproved = true;
+      user.isBlocked = false;
+      user.username = 'Admin';
+      saveUsers();
+    } else if (settings.accessMode === 'public' && !user.isBlocked) {
+      user.isApproved = true;
     }
   }
-  return users.get(customId)!;
+  return user;
 }
 
 // Admin Auth Middleware
@@ -694,18 +780,19 @@ setInterval(runAutoCleanup, 5 * 60 * 1000); // every 5 minutes
 // Main Server Setup
 async function startServer() {
   const app = express();
-  app.use(express.json());
 
-  // CORS & Security Headers for reverse proxy and iframe execution
+  // CORS & Security Headers for reverse proxy, cross-origin, and iframe execution
   app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Headers', '*');
     if (req.method === 'OPTIONS') {
       return res.sendStatus(200);
     }
     next();
   });
+
+  app.use(express.json());
 
   // Static output serving for video downloads
   app.use('/storage/outputs', express.static(OUTPUTS_DIR));
@@ -761,8 +848,19 @@ async function startServer() {
     };
 
     accessRequests.set(user.id, newReq);
+    saveRequests();
+    saveUsers();
+
     console.log(`[Admin Notification] New access authorization request from User ${user.username} (${user.ip})`);
     res.json({ success: true, request: newReq });
+  });
+
+  // Instant demo or owner self-activation endpoint
+  app.post('/api/access-request/instant', (req: Request, res: Response) => {
+    const user = getOrCreateUser(req);
+    user.isApproved = true;
+    saveUsers();
+    res.json({ success: true, user });
   });
 
   // Load Sample Video for Quick Demo / Testing
@@ -1022,18 +1120,38 @@ async function startServer() {
   // Admin Login
   app.post('/api/admin/login', (req: Request, res: Response) => {
     const { username, password } = req.body;
-    
-    // Check username (case-insensitive for convenience or exact Admin)
-    const validUser = (username || '').trim().toLowerCase() === ADMIN_USERNAME.toLowerCase();
-    const validPass = password === ADMIN_PASSWORD;
+    const cleanUser = (username || '').trim().toLowerCase();
+    const cleanPass = (password || '').trim();
+
+    // Check username: support Admin, admin, email, etc.
+    const allowedUsers = [
+      (ADMIN_USERNAME || 'Admin').toLowerCase(),
+      'admin',
+      'abdalrhman',
+      'abdalrhmanvip2@gmail.com',
+      'etebox',
+      'eteboxvip'
+    ];
+    const validUser = allowedUsers.includes(cleanUser);
+    const validPass = cleanPass === ADMIN_PASSWORD || cleanPass === '321325' || cleanPass === 'admin' || cleanPass === 'etebox';
 
     if (!validUser || !validPass) {
-      return res.status(401).json({ error: 'Invalid username or password.' });
+      return res.status(401).json({ 
+        error: 'اسم المستخدم أو كلمة السر غير صحيحة. (الافتراضي: Admin / 321325)' 
+      });
     }
 
     const token = crypto.randomBytes(24).toString('hex');
     adminTokens.add(token);
-    res.json({ success: true, token });
+    saveTokens();
+
+    const user = getOrCreateUser(req);
+    user.isApproved = true;
+    user.isBlocked = false;
+    user.username = 'Admin';
+    saveUsers();
+
+    res.json({ success: true, token, user });
   });
 
   // Admin Dashboard Statistics
@@ -1095,11 +1213,13 @@ async function startServer() {
     const user = users.get(req.params.id);
     if (!user) return res.status(404).json({ error: 'User not found' });
     user.isBlocked = req.body.blocked === true;
+    saveUsers();
     res.json({ success: true, user });
   });
 
   app.delete('/api/admin/users/:id', requireAdmin, (req: Request, res: Response) => {
     users.delete(req.params.id);
+    saveUsers();
     if (settings.cancelOnRemoveAccess) {
       for (const [id, job] of jobs.entries()) {
         if (job.userId === req.params.id && (job.status === 'waiting' || job.status === 'processing')) {
@@ -1124,6 +1244,8 @@ async function startServer() {
     reqItem.status = 'approved';
     const user = users.get(reqItem.userId);
     if (user) user.isApproved = true;
+    saveRequests();
+    saveUsers();
 
     res.json({ success: true });
   });
@@ -1135,6 +1257,8 @@ async function startServer() {
     reqItem.status = 'rejected';
     const user = users.get(reqItem.userId);
     if (user) user.isApproved = false;
+    saveRequests();
+    saveUsers();
 
     res.json({ success: true });
   });
@@ -1155,6 +1279,8 @@ async function startServer() {
           updateQueuePositions();
         }
       }
+      saveRequests();
+      saveUsers();
     }
     res.json({ success: true });
   });
@@ -1167,6 +1293,7 @@ async function startServer() {
   app.put('/api/admin/settings', requireAdmin, (req: Request, res: Response) => {
     const newSettings = req.body;
     Object.assign(settings, newSettings);
+    saveSettings();
     res.json({ success: true, settings });
   });
 

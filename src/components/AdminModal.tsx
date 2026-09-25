@@ -74,9 +74,13 @@ export const AdminModal: React.FC<AdminModalProps> = ({
     setLoginError(null);
 
     try {
+      const clientId = localStorage.getItem('etebox_client_id') || '';
       const res = await fetch('/api/admin/login', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-client-id': clientId,
+        },
         body: JSON.stringify({ username: usernameInput, password: passwordInput }),
       });
       const data = await res.json();
@@ -85,14 +89,15 @@ export const AdminModal: React.FC<AdminModalProps> = ({
         localStorage.setItem('etebox_admin_token', data.token);
         setUsernameInput('');
         setPasswordInput('');
+        showNotice('تم تسجيل الدخول بنجاح كمسؤول النظام ✓');
         if (onSettingsUpdated) {
           onSettingsUpdated();
         }
       } else {
-        setLoginError(data.error || 'Invalid administrator username or password.');
+        setLoginError(data.error || 'اسم المستخدم أو كلمة السر غير صحيحة.');
       }
     } catch (err: any) {
-      setLoginError(err.message || 'Login network error.');
+      setLoginError(err.message || 'خطأ في الاتصال بالخادم.');
     } finally {
       setIsLoggingIn(false);
     }
@@ -301,7 +306,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
         {!adminToken ? (
           <div className="p-8 sm:p-12 max-w-md mx-auto text-center space-y-6">
             <div className="w-16 h-16 mx-auto rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
-              <Lock className="w-8 h-8" />
+              <Shield className="w-8 h-8" />
             </div>
 
             <div>
@@ -309,7 +314,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                 تسجيل دخول مسؤول النظام (Admin)
               </h3>
               <p className="text-xs text-slate-400">
-                لوحة التحكم محمية. يرجى إدخال اسم المستخدم وكلمة السر المعتمدة.
+                لوحة التحكم المباشرة لإدارة التصاريح وإعدادات النظام.
               </p>
             </div>
 
@@ -347,10 +352,24 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                 <p className="text-xs text-rose-400 font-semibold">{loginError}</p>
               )}
 
+              <div className="flex items-center justify-between text-xs px-1 text-slate-400">
+                <span>بيانات الدخول الافتراضية:</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUsernameInput('Admin');
+                    setPasswordInput('321325');
+                  }}
+                  className="text-amber-400 hover:text-amber-300 font-bold underline transition-colors"
+                >
+                  تعبئة تلقائية (Admin / 321325)
+                </button>
+              </div>
+
               <button
                 type="submit"
                 disabled={isLoggingIn || !passwordInput || !usernameInput}
-                className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-sm shadow-lg shadow-amber-500/20 transition-all disabled:opacity-50"
+                className="w-full py-3.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-sm shadow-lg shadow-amber-500/20 transition-all disabled:opacity-50"
               >
                 {isLoggingIn ? 'جاري التحقق...' : 'دخول لوحة التحكم'}
               </button>

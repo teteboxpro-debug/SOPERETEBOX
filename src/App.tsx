@@ -96,11 +96,24 @@ export default function App() {
   const [isAdminOpen, setIsAdminOpen] = useState(false);
   const [isAccessModalOpen, setIsAccessModalOpen] = useState(false);
 
+  // Client ID helper for stable session identification
+  const getClientId = () => {
+    let cid = typeof window !== 'undefined' ? localStorage.getItem('etebox_client_id') : null;
+    if (!cid) {
+      cid = 'client_' + Math.random().toString(36).substring(2, 11) + Date.now().toString(36);
+      localStorage.setItem('etebox_client_id', cid);
+    }
+    return cid;
+  };
+
   // Fetch initial access status and jobs
   const fetchStatus = async () => {
     try {
       const adminToken = localStorage.getItem('etebox_admin_token');
-      const headers: Record<string, string> = {};
+      const clientId = getClientId();
+      const headers: Record<string, string> = {
+        'x-client-id': clientId,
+      };
       if (adminToken) {
         headers['Authorization'] = `Bearer ${adminToken}`;
       }
@@ -108,7 +121,8 @@ export default function App() {
       const data = await res.json();
       if (data.success) {
         setAccessMode(data.accessMode || data.settings?.accessMode || 'private');
-        setIsApproved(data.user?.isApproved ?? false);
+        const approved = Boolean(adminToken) || Boolean(data.user?.isApproved);
+        setIsApproved(approved);
         setIsBlocked(data.user?.isBlocked ?? false);
         if (data.adminContactEmail) {
           setAdminContactEmail(data.adminContactEmail);
@@ -132,9 +146,11 @@ export default function App() {
 
     try {
       const adminToken = localStorage.getItem('etebox_admin_token');
+      const clientId = getClientId();
       const headers: Record<string, string> = {
         'Accept': 'application/json',
         'Cache-Control': 'no-cache',
+        'x-client-id': clientId,
       };
       if (adminToken) {
         headers['Authorization'] = `Bearer ${adminToken}`;
@@ -218,7 +234,11 @@ export default function App() {
 
     try {
       const adminToken = localStorage.getItem('etebox_admin_token');
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const clientId = getClientId();
+      const headers: Record<string, string> = { 
+        'Content-Type': 'application/json',
+        'x-client-id': clientId,
+      };
       if (adminToken) {
         headers['Authorization'] = `Bearer ${adminToken}`;
       }
@@ -287,30 +307,45 @@ export default function App() {
         onRequestAccess={() => setIsAccessModalOpen(true)}
       />
 
-      {/* Blocked or Private Notice */}
+      {/* Blocked Account Notice */}
       {isBlocked && (
         <div className="bg-rose-500/10 border-b border-rose-500/20 text-rose-300 text-xs px-4 py-2.5 text-center font-semibold">
-          Your account is currently blocked by the administrator. Processing is disabled.
+          تم حظر الحساب من قبل مسؤول النظام. يرجى التواصل مع الإدارة.
         </div>
       )}
 
-      {(!isApproved || accessMode === 'private') && !isApproved && (
-        <div className="bg-amber-500/15 border-b border-amber-500/30 text-amber-300 text-xs px-4 py-3 flex flex-wrap items-center justify-center gap-3">
-          <span className="font-medium text-center">
-            🔒 لا يمكن استخدام التطبيق إلا بتصريح من الأدمن. للتواصل:{' '}
-            <a
-              href={`mailto:${adminContactEmail}?subject=طلب تصريح تطبيق ETEBOX VIP`}
-              className="font-bold underline text-amber-400 hover:text-white font-mono"
+      {/* Permission Notice (only shown when not approved and accessMode is private) */}
+      {!isApproved && accessMode === 'private' && (
+        <div className="bg-gradient-to-r from-amber-500/15 via-slate-900 to-amber-500/15 border-b border-amber-500/20 text-amber-200 text-xs px-4 py-2.5 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center space-x-2">
+            <Sparkles className="w-4 h-4 text-amber-400 flex-shrink-0" />
+            <span>
+              {existingAccessReq
+                ? `طلب التصريح قيد المراجعة لدى الإدارة. للتواصل:`
+                : `يتطلب استخدام المنصة تصريحاً من الإدارة. للتواصل:`}
+              {' '}
+              <a
+                href={`mailto:${adminContactEmail}?subject=طلب تصريح تطبيق ETEBOX VIP`}
+                className="font-bold underline text-amber-400 hover:text-white font-mono ml-1"
+              >
+                {adminContactEmail}
+              </a>
+            </span>
+          </div>
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => setIsAccessModalOpen(true)}
+              className="px-3 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-sm transition-all"
             >
-              {adminContactEmail}
-            </a>
-          </span>
-          <button
-            onClick={() => setIsAccessModalOpen(true)}
-            className="px-3 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-sm transition-all"
-          >
-            طلب تصريح الآن
-          </button>
+              {existingAccessReq ? 'تفاصيل الطلب' : 'طلب تصريح'}
+            </button>
+            <button
+              onClick={() => setIsAdminOpen(true)}
+              className="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs border border-slate-700 transition-all"
+            >
+              دخول الأدمن
+            </button>
+          </div>
         </div>
       )}
 
@@ -485,9 +520,14 @@ export default function App() {
         onClose={() => setIsAccessModalOpen(false)}
         existingRequest={existingAccessReq}
         adminEmail={adminContactEmail}
+        onOpenAdmin={() => setIsAdminOpen(true)}
+        onInstantApproved={() => {
+          setIsApproved(true);
+          fetchStatus();
+        }}
         onRequestSubmitted={(req) => {
           setExistingAccessReq(req);
-          setIsAccessModalOpen(false);
+          fetchStatus();
         }}
       />
     </div>

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Shield, Film, ListOrdered, CheckCircle2, Lock } from 'lucide-react';
+import { Shield, Film, ListOrdered, CheckCircle2, ShieldCheck } from 'lucide-react';
 import type { QueueJob } from '../types.js';
 
 interface HeaderProps {
@@ -21,6 +21,7 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const activeCount = jobs.filter((j) => j.status === 'processing' || j.status === 'waiting').length;
   const completedCount = jobs.filter((j) => j.status === 'completed').length;
+  const hasAdminToken = Boolean(typeof window !== 'undefined' && localStorage.getItem('etebox_admin_token'));
 
   return (
     <header className="sticky top-0 z-30 bg-slate-900/90 backdrop-blur-md border-b border-slate-800">
@@ -50,18 +51,18 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Access status badge in private mode */}
           {accessMode === 'private' && (
             <div>
-              {isApproved ? (
-                <span className="inline-flex items-center text-xs font-medium px-2.5 py-1 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              {isApproved || hasAdminToken ? (
+                <span className="inline-flex items-center text-xs font-semibold px-2.5 py-1 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                   <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
-                  Authorized
+                  {hasAdminToken ? 'مسؤول (Admin)' : 'مصرّح بالاستخدام'}
                 </span>
               ) : (
                 <button
                   onClick={onRequestAccess}
                   className="inline-flex items-center text-xs font-semibold px-2.5 py-1 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30 hover:bg-amber-500/30 transition-colors"
                 >
-                  <Lock className="w-3.5 h-3.5 mr-1" />
-                  Request Access
+                  <ShieldCheck className="w-3.5 h-3.5 mr-1" />
+                  طلب تصريح
                 </button>
               )}
             </div>
@@ -89,11 +90,15 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Admin Button */}
           <button
             onClick={onOpenAdmin}
-            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700 border border-slate-700/70 text-slate-300 text-xs sm:text-sm font-medium transition-all"
+            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border text-xs sm:text-sm font-medium transition-all ${
+              hasAdminToken 
+                ? 'bg-amber-500/10 border-amber-500/30 text-amber-300 hover:bg-amber-500/20' 
+                : 'bg-slate-800/80 hover:bg-slate-700 border-slate-700/70 text-slate-300'
+            }`}
             title="Administrator Panel"
           >
-            <Shield className="w-4 h-4 text-slate-400" />
-            <span className="hidden sm:inline">Admin</span>
+            <Shield className="w-4 h-4 text-amber-400" />
+            <span className="hidden sm:inline">{hasAdminToken ? 'لوحة الأدمن' : 'Admin'}</span>
           </button>
         </div>
       </div>

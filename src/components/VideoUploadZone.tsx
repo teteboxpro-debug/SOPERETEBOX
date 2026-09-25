@@ -62,6 +62,10 @@ export const VideoUploadZone: React.FC<VideoUploadZoneProps> = ({
       if (adminToken) {
         xhr.setRequestHeader('Authorization', `Bearer ${adminToken}`);
       }
+      const clientId = localStorage.getItem('etebox_client_id');
+      if (clientId) {
+        xhr.setRequestHeader('x-client-id', clientId);
+      }
 
       xhr.upload.onprogress = (event) => {
         if (event.lengthComputable) {
@@ -148,7 +152,13 @@ export const VideoUploadZone: React.FC<VideoUploadZoneProps> = ({
     setLoadingSample(true);
     setErrorMessage(null);
     try {
-      const res = await fetch('/api/sample-video');
+      const adminToken = localStorage.getItem('etebox_admin_token');
+      const clientId = localStorage.getItem('etebox_client_id');
+      const headers: Record<string, string> = {};
+      if (adminToken) headers['Authorization'] = `Bearer ${adminToken}`;
+      if (clientId) headers['x-client-id'] = clientId;
+
+      const res = await fetch('/api/sample-video', { headers });
       const data = await res.json();
       if (data.success && data.video) {
         onVideoSelected(data.video);

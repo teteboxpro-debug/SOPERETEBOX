@@ -1,0 +1,22 @@
+{
+  "test_client_1": {
+    "id": "test_client_1",
+    "ip": "127.0.0.1",
+    "username": "Admin",
+    "isBlocked": false,
+    "isApproved": true,
+    "firstSeen": "2026-09-25T19:28:06.855Z",
+    "lastActive": "2026-09-25T19:28:06.855Z",
+    "totalJobs": 0
+  },
+  "test_client_2": {
+    "id": "test_client_2",
+    "ip": "127.0.0.1",
+    "username": "Abdalrhman VIP",
+    "isBlocked": false,
+    "isApproved": true,
+    "firstSeen": "2026-09-25T19:28:10.237Z",
+    "lastActive": "2026-09-25T19:28:12.687Z",
+    "totalJobs": 0
+  }
+}
