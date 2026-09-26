@@ -328,7 +328,8 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                   required
                   value={usernameInput}
                   onChange={(e) => setUsernameInput(e.target.value)}
-                  placeholder="Admin"
+                  placeholder="أدخل اسم المستخدم"
+                  autoComplete="username"
                   className="w-full px-4 py-3 rounded-xl bg-slate-950 border border-slate-700 text-white text-sm focus:outline-none focus:border-amber-400"
                   autoFocus
                 />
@@ -343,7 +344,8 @@ export const AdminModal: React.FC<AdminModalProps> = ({
                   required
                   value={passwordInput}
                   onChange={(e) => setPasswordInput(e.target.value)}
-                  placeholder="••••••"
+                  placeholder="••••••••"
+                  autoComplete="current-password"
                   className="w-full px-4 py-3 rounded-xl bg-slate-950 border border-slate-700 text-white text-sm focus:outline-none focus:border-amber-400"
                 />
               </div>
@@ -351,20 +353,6 @@ export const AdminModal: React.FC<AdminModalProps> = ({
               {loginError && (
                 <p className="text-xs text-rose-400 font-semibold">{loginError}</p>
               )}
-
-              <div className="flex items-center justify-between text-xs px-1 text-slate-400">
-                <span>بيانات الدخول الافتراضية:</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setUsernameInput('Admin');
-                    setPasswordInput('321325');
-                  }}
-                  className="text-amber-400 hover:text-amber-300 font-bold underline transition-colors"
-                >
-                  تعبئة تلقائية (Admin / 321325)
-                </button>
-              </div>
 
               <button
                 type="submit"

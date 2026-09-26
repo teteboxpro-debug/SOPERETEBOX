@@ -1,4 +1,5 @@
-import express, { Request, Response, NextFunction } from 'express';
+import express from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
 import { spawn, execSync } from 'child_process';
@@ -15,7 +16,30 @@ import type {
   VideoMetadata
 } from './src/types.js';
 
-const PORT = 3000;
+function resolvePort(): number {
+  // Check CLI arguments for --port (e.g. passed by control plane or startup scripts)
+  const portArgIndex = process.argv.indexOf('--port');
+  if (portArgIndex !== -1 && process.argv[portArgIndex + 1]) {
+    const val = parseInt(process.argv[portArgIndex + 1], 10);
+    if (!isNaN(val) && val !== 8080) {
+      return val;
+    }
+  }
+  // If APP_PORT is explicitly specified, use it
+  if (process.env.APP_PORT) {
+    const val = parseInt(process.env.APP_PORT, 10);
+    if (!isNaN(val) && val !== 8080) return val;
+  }
+  // If PORT is specified and is NOT 8080 (which is bound by the Nginx reverse proxy), use it
+  if (process.env.PORT && process.env.PORT !== '8080') {
+    const val = parseInt(process.env.PORT, 10);
+    if (!isNaN(val)) return val;
+  }
+  // Default to 3000 as required by Nginx proxy and environment specification
+  return 3000;
+}
+
+const PORT = resolvePort();
 const STORAGE_ROOT = process.env.STORAGE_PATH || path.join(process.cwd(), 'storage');
 const UPLOADS_DIR = path.join(STORAGE_ROOT, 'uploads');
 const OUTPUTS_DIR = path.join(STORAGE_ROOT, 'outputs');
@@ -1137,7 +1161,7 @@ async function startServer() {
 
     if (!validUser || !validPass) {
       return res.status(401).json({ 
-        error: 'اسم المستخدم أو كلمة السر غير صحيحة. (الافتراضي: Admin / 321325)' 
+        error: 'اسم المستخدم أو كلمة السر غير صحيحة.' 
       });
     }
 
@@ -1315,22 +1339,38 @@ async function startServer() {
   // ----------------------------------------------------
   // Vite Integration (Dev Mode & Production Mode)
   // ----------------------------------------------------
-  if (process.env.NODE_ENV !== 'production') {
+  const distPath = path.join(process.cwd(), 'dist');
+  const distIndexHtml = path.join(distPath, 'index.html');
+  const hasDist = fs.existsSync(distIndexHtml);
+  // Only use static serving if dist/index.html actually exists; otherwise fall back to Vite middleware
+  const isProduction = process.env.NODE_ENV !== 'development' && hasDist;
+
+  if (isProduction) {
+    app.use(express.static(distPath));
+    app.get('*', (req: Request, res: Response, next: NextFunction) => {
+      if (req.path.startsWith('/api') || req.path.startsWith('/storage')) {
+        return next();
+      }
+      if (fs.existsSync(distIndexHtml)) {
+        res.sendFile(distIndexHtml, (err) => {
+          if (err) {
+            next(err);
+          }
+        });
+      } else {
+        res.status(404).send('Not Found');
+      }
+    });
+  } else {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`ETEBOX Video Watermark server running at http://0.0.0.0:${PORT}`);
+    console.log(`ETEBOX Video Watermark server running at http://0.0.0.0:${PORT} (Mode: ${isProduction ? 'production' : 'development'})`);
   });
 }
 
