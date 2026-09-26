@@ -119,23 +119,42 @@ export default function App() {
         headers['Authorization'] = `Bearer ${adminToken}`;
       }
       const res = await fetch('/api/access-status', { headers });
-      const data = await res.json();
-      if (data.success) {
-        setAccessMode(data.accessMode || data.settings?.accessMode || 'private');
-        const approved = Boolean(adminToken) || Boolean(data.user?.isApproved);
-        setIsApproved(approved);
-        setIsBlocked(data.user?.isBlocked ?? false);
-        if (data.adminContactEmail) {
-          setAdminContactEmail(data.adminContactEmail);
-        }
-        setMaxVideosPerUser(data.settings?.maxVideosPerUser || 3);
-        if (data.accessRequest) {
-          setExistingAccessReq(data.accessRequest);
+      const ct = res.headers.get('content-type') || '';
+      if (res.ok && ct.includes('application/json')) {
+        const data = await res.json();
+        if (data.success) {
+          setAccessMode(data.accessMode || data.settings?.accessMode || 'private');
+          const approved = Boolean(adminToken) || Boolean(data.user?.isApproved);
+          setIsApproved(approved);
+          setIsBlocked(data.user?.isBlocked ?? false);
+          if (data.adminContactEmail) {
+            setAdminContactEmail(data.adminContactEmail);
+          }
+          setMaxVideosPerUser(data.settings?.maxVideosPerUser || 3);
+          if (data.accessRequest) {
+            setExistingAccessReq(data.accessRequest);
+          }
+          return;
         }
       }
     } catch (e) {
-      console.error('Failed to fetch access status:', e);
+      console.warn('Backend access check skipped or offline:', e);
     }
+
+    // Fallback for static hosts (e.g. Vercel) or offline mode:
+    const adminToken = localStorage.getItem('etebox_admin_token');
+    if (adminToken) {
+      setIsApproved(true);
+      setIsBlocked(false);
+    }
+    try {
+      const savedSettingsRaw = localStorage.getItem('etebox_saved_settings');
+      if (savedSettingsRaw) {
+        const parsed = JSON.parse(savedSettingsRaw);
+        if (parsed.accessMode) setAccessMode(parsed.accessMode);
+        if (parsed.maxVideosPerUser) setMaxVideosPerUser(parsed.maxVideosPerUser);
+      }
+    } catch (e) {}
   };
 
   // Poll jobs list with visibility awareness and resilient retry
@@ -261,26 +280,47 @@ export default function App() {
         headers['Authorization'] = `Bearer ${adminToken}`;
       }
 
-      // 1. Register job metadata with the server (zero video file data transferred)
-      const res = await fetch('/api/process', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          video: currentVideo,
-          watermarkConfig,
-        }),
-      });
+      // 1. Register job metadata with the server if available (zero video file data transferred)
+      let registeredJob: QueueJob | null = null;
+      try {
+        const res = await fetch('/api/process', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            video: currentVideo,
+            watermarkConfig,
+          }),
+        });
 
-      const data = await res.json();
-      if (!data.success || !data.job) {
-        setSubmitError(data.error || 'Failed to submit video for processing.');
-        return;
+        const ct = res.headers.get('content-type') || '';
+        if (res.ok && ct.includes('application/json')) {
+          const data = await res.json();
+          if (data.success && data.job) {
+            registeredJob = data.job;
+          } else if (data.error) {
+            setSubmitError(data.error);
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn('Backend process registration skipped, proceeding with client-side job:', e);
       }
 
+      const jobId = registeredJob?.id || 'job_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
       const newJob: QueueJob = {
-        ...data.job,
+        id: jobId,
+        userId: clientId,
+        video: currentVideo,
+        watermarkConfig,
         status: 'processing',
+        uploadProgress: 100,
         processingProgress: 0,
+        queuePosition: 1,
+        elapsedTimeSec: 0,
+        estimatedRemainingSec: Math.round(currentVideo.duration),
+        totalProcessingTimeSec: 0,
+        createdAt: registeredJob?.createdAt || new Date().toISOString(),
+        ...registeredJob,
       };
 
       // Update UI immediately

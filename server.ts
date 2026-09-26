@@ -40,13 +40,17 @@ function resolvePort(): number {
 }
 
 const PORT = resolvePort();
-const STORAGE_ROOT = process.env.STORAGE_PATH || path.join(process.cwd(), 'storage');
+const STORAGE_ROOT = process.env.STORAGE_PATH || (process.env.VERCEL ? '/tmp/storage' : path.join(process.cwd(), 'storage'));
 const UPLOADS_DIR = path.join(STORAGE_ROOT, 'uploads');
 const OUTPUTS_DIR = path.join(STORAGE_ROOT, 'outputs');
 
 // Ensure storage directories exist
-fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-fs.mkdirSync(OUTPUTS_DIR, { recursive: true });
+try {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  fs.mkdirSync(OUTPUTS_DIR, { recursive: true });
+} catch (e) {
+  console.warn('Storage directory initialization warning:', e);
+}
 
 // Setup multer storage for incoming files
 const storage = multer.diskStorage({
@@ -650,11 +654,10 @@ function runAutoCleanup() {
 }
 setInterval(runAutoCleanup, 5 * 60 * 1000); // every 5 minutes
 
-// Main Server Setup
-async function startServer() {
-  const app = express();
+// Main Server & Express App Setup
+export const app = express();
 
-  // CORS & Security Headers for reverse proxy, cross-origin, and iframe execution
+// CORS & Security Headers for reverse proxy, cross-origin, and iframe execution
   app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -1183,41 +1186,46 @@ async function startServer() {
   // ----------------------------------------------------
   // Vite Integration (Dev Mode & Production Mode)
   // ----------------------------------------------------
-  const distPath = path.join(process.cwd(), 'dist');
-  const distIndexHtml = path.join(distPath, 'index.html');
-  const hasDist = fs.existsSync(distIndexHtml);
-  // Only use static serving if dist/index.html actually exists; otherwise fall back to Vite middleware
-  const isProduction = process.env.NODE_ENV !== 'development' && hasDist;
+  async function startServer() {
+    const distPath = path.join(process.cwd(), 'dist');
+    const distIndexHtml = path.join(distPath, 'index.html');
+    const hasDist = fs.existsSync(distIndexHtml);
+    // Only use static serving if dist/index.html actually exists; otherwise fall back to Vite middleware
+    const isProduction = process.env.NODE_ENV !== 'development' && hasDist;
 
-  if (isProduction) {
-    app.use(express.static(distPath));
-    app.get('*', (req: Request, res: Response, next: NextFunction) => {
-      if (req.path.startsWith('/api') || req.path.startsWith('/storage')) {
-        return next();
-      }
-      if (fs.existsSync(distIndexHtml)) {
-        res.sendFile(distIndexHtml, (err) => {
-          if (err) {
-            next(err);
-          }
-        });
-      } else {
-        res.status(404).send('Not Found');
-      }
+    if (isProduction) {
+      app.use(express.static(distPath));
+      app.get('*', (req: Request, res: Response, next: NextFunction) => {
+        if (req.path.startsWith('/api') || req.path.startsWith('/storage')) {
+          return next();
+        }
+        if (fs.existsSync(distIndexHtml)) {
+          res.sendFile(distIndexHtml, (err) => {
+            if (err) {
+              next(err);
+            }
+          });
+        } else {
+          res.status(404).send('Not Found');
+        }
+      });
+    } else if (!process.env.VERCEL) {
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: 'spa',
+      });
+      app.use(vite.middlewares);
+    }
+
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`ETEBOX Video Watermark server running at http://0.0.0.0:${PORT} (Mode: ${isProduction ? 'production' : 'development'})`);
     });
-  } else {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`ETEBOX Video Watermark server running at http://0.0.0.0:${PORT} (Mode: ${isProduction ? 'production' : 'development'})`);
-  });
-}
+  if (!process.env.VERCEL) {
+    startServer().catch((err) => {
+      console.error('Fatal server startup error:', err);
+    });
+  }
 
-startServer().catch((err) => {
-  console.error('Fatal server startup error:', err);
-});
+  export default app;
