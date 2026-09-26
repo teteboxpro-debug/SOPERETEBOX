@@ -121,28 +121,17 @@ export const WatermarkConfigurator: React.FC<WatermarkConfiguratorProps> = ({
     setUploadingLogo(true);
     setLogoError(null);
 
-    const formData = new FormData();
-    formData.append('logo', file);
-
     try {
-      const res = await fetch('/api/upload-logo', {
-        method: 'POST',
-        body: formData,
+      const objectUrl = URL.createObjectURL(file);
+      update({
+        type: config.type === 'both' ? 'both' : 'image',
+        logoUrl: objectUrl,
+        logoFilename: file.name,
+        isNewlySelected: true,
+        isWatermarkDeleted: false,
       });
-      const data = await res.json();
-      if (data.success && data.logo) {
-        update({
-          type: config.type === 'both' ? 'both' : 'image',
-          logoUrl: data.logo.url,
-          logoFilename: data.logo.filename,
-          isNewlySelected: true,
-          isWatermarkDeleted: false,
-        });
-      } else {
-        setLogoError(data.error || 'Failed to upload logo');
-      }
     } catch (err: any) {
-      setLogoError(err.message || 'Error uploading logo');
+      setLogoError(err.message || 'Error loading logo');
     } finally {
       setUploadingLogo(false);
     }

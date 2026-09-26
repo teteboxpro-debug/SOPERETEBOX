@@ -28,6 +28,7 @@ import { LiveVideoPreview } from './components/LiveVideoPreview.js';
 import { QueueManager } from './components/QueueManager.js';
 import { AdminModal } from './components/AdminModal.js';
 import { AccessRequestModal } from './components/AccessRequestModal.js';
+import { getLocalVideoFile, processVideoClientSide } from './utils/clientVideoProcessor.js';
 
 export default function App() {
   // Video & Configuration States
@@ -162,7 +163,24 @@ export default function App() {
       }
       const data = await res.json();
       if (data && data.success && Array.isArray(data.jobs)) {
-        setJobs(data.jobs);
+        setJobs((prevJobs) => {
+          const localMap = new Map(prevJobs.map((j) => [j.id, j]));
+          return data.jobs.map((serverJob: QueueJob) => {
+            const local = localMap.get(serverJob.id);
+            if (local) {
+              return {
+                ...serverJob,
+                outputUrl: local.outputUrl || serverJob.outputUrl,
+                outputSize: local.outputSize || serverJob.outputSize,
+                status: local.status === 'completed' ? 'completed' : (local.status || serverJob.status),
+                processingProgress: local.status === 'completed' ? 100 : (local.processingProgress ?? serverJob.processingProgress),
+                elapsedTimeSec: local.elapsedTimeSec ?? serverJob.elapsedTimeSec,
+                estimatedRemainingSec: local.estimatedRemainingSec ?? serverJob.estimatedRemainingSec,
+              };
+            }
+            return serverJob;
+          });
+        });
       }
     } catch {
       // Quietly ignore transient network drops or server reloads during dev
@@ -243,6 +261,7 @@ export default function App() {
         headers['Authorization'] = `Bearer ${adminToken}`;
       }
 
+      // 1. Register job metadata with the server (zero video file data transferred)
       const res = await fetch('/api/process', {
         method: 'POST',
         headers,
@@ -253,16 +272,93 @@ export default function App() {
       });
 
       const data = await res.json();
-      if (data.success && data.job) {
-        // Scroll to queue manager section
-        const queueElem = document.getElementById('processing-queue');
-        if (queueElem) {
-          queueElem.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-        fetchJobs();
-      } else {
+      if (!data.success || !data.job) {
         setSubmitError(data.error || 'Failed to submit video for processing.');
+        return;
       }
+
+      const newJob: QueueJob = {
+        ...data.job,
+        status: 'processing',
+        processingProgress: 0,
+      };
+
+      // Update UI immediately
+      setJobs((prev) => [newJob, ...prev.filter((j) => j.id !== newJob.id)]);
+
+      // Scroll to queue manager section
+      const queueElem = document.getElementById('processing-queue');
+      if (queueElem) {
+        queueElem.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+
+      // 2. Start client-side video processing directly on user's device/connection
+      const videoSource = getLocalVideoFile(currentVideo.id) || currentVideo.url;
+
+      const syncJob = (
+        status: 'processing' | 'completed' | 'failed',
+        pct: number,
+        elapsed: number,
+        rem: number,
+        outputSize?: number,
+        outputUrl?: string
+      ) => {
+        setJobs((prev) =>
+          prev.map((j) =>
+            j.id === newJob.id
+              ? {
+                  ...j,
+                  status,
+                  processingProgress: pct,
+                  elapsedTimeSec: elapsed,
+                  estimatedRemainingSec: rem,
+                  totalProcessingTimeSec: elapsed,
+                  outputSize: outputSize || j.outputSize,
+                  outputUrl: outputUrl || j.outputUrl,
+                }
+              : j
+          )
+        );
+
+        // Lightweight status sync (metadata only, zero video bytes)
+        fetch(`/api/jobs/${newJob.id}/sync`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-client-id': clientId,
+            ...(adminToken ? { Authorization: `Bearer ${adminToken}` } : {}),
+          },
+          body: JSON.stringify({
+            status,
+            processingProgress: pct,
+            elapsedTimeSec: elapsed,
+            estimatedRemainingSec: rem,
+            totalProcessingTimeSec: elapsed,
+            outputSize,
+          }),
+        }).catch(() => {});
+      };
+
+      processVideoClientSide(videoSource, currentVideo, watermarkConfig, (pct, elapsed, rem) => {
+        syncJob('processing', pct, elapsed, rem);
+      })
+        .then((result) => {
+          syncJob('completed', 100, newJob.elapsedTimeSec || 1, 0, result.size, result.url);
+        })
+        .catch((err) => {
+          setJobs((prev) =>
+            prev.map((j) =>
+              j.id === newJob.id
+                ? {
+                    ...j,
+                    status: 'failed',
+                    errorMessage: err.message || 'Processing failed.',
+                  }
+                : j
+            )
+          );
+        });
+
     } catch (err: any) {
       setSubmitError(err.message || 'Network error while submitting processing job.');
     } finally {

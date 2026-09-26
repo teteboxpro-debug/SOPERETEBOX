@@ -612,160 +612,9 @@ function buildFfmpegFilter(
 
 // Queue Processor Engine
 function processNextInQueue() {
-  if (activeProcessingJobs >= settings.maxConcurrentJobs) {
-    return;
-  }
-
-  // Find next waiting job FIFO
-  let nextJob: QueueJob | null = null;
-  for (const job of jobs.values()) {
-    if (job.status === 'waiting') {
-      nextJob = job;
-      break;
-    }
-  }
-
-  if (!nextJob) {
-    return;
-  }
-
-  // Check if user is blocked
-  const user = users.get(nextJob.userId);
-  if (user && user.isBlocked) {
-    nextJob.status = 'failed';
-    nextJob.errorMessage = 'Account is blocked by administrator.';
-    processNextInQueue();
-    return;
-  }
-
-  // Check access in private mode
-  if (settings.accessMode === 'private' && (!user || !user.isApproved)) {
-    nextJob.status = 'failed';
-    nextJob.errorMessage = 'Access denied. Administrator approval required.';
-    processNextInQueue();
-    return;
-  }
-
-  // Start processing
-  activeProcessingJobs++;
-  nextJob.status = 'processing';
-  nextJob.startedAt = new Date().toISOString();
-  nextJob.queuePosition = 0;
-
-  const currentJob = nextJob;
-  const inputVideoPath = path.join(UPLOADS_DIR, currentJob.video.filename);
-  const outputFileName = `etebox_wm_${currentJob.id}_${Date.now()}.mp4`;
-  const outputVideoPath = path.join(OUTPUTS_DIR, outputFileName);
-
-  const hasLogo = Boolean(currentJob.watermarkConfig.logoFilename);
-  const logoPath = hasLogo ? path.join(UPLOADS_DIR, currentJob.watermarkConfig.logoFilename!) : undefined;
-
-  const { filterGraph, inputArgs } = buildFfmpegFilter(
-    currentJob.watermarkConfig,
-    currentJob.video,
-    hasLogo,
-    logoPath
-  );
-
-  // FFmpeg arguments configured for high quality and speed
-  // Preserves original resolution, FPS, audio stream
-  const ffmpegArgs = [
-    '-y',
-    '-threads',
-    '0',
-    '-i',
-    inputVideoPath,
-    ...inputArgs,
-    '-filter_complex',
-    filterGraph,
-    '-c:v',
-    'libx264',
-    '-preset',
-    settings.encodingPreset,
-    '-crf',
-    '19', // visually near-lossless
-    '-pix_fmt',
-    'yuv420p',
-    '-movflags',
-    '+faststart',
-    '-c:a',
-    'copy', // preserve pristine original audio & sample rate without re-encoding
-    '-progress',
-    'pipe:1',
-    outputVideoPath,
-  ];
-
-  console.log(`[FFmpeg] Starting Job ${currentJob.id} -> ${outputFileName}`);
-  const startTime = Date.now();
-  const ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
-
-  let stderrBuffer = '';
-
-  ffmpegProcess.stdout.on('data', (data) => {
-    const text = data.toString();
-    const lines = text.split('\n');
-    for (const line of lines) {
-      const [key, value] = line.split('=');
-      if (key === 'out_time_ms' && value) {
-        const outTimeMicro = parseInt(value.trim(), 10);
-        if (!isNaN(outTimeMicro)) {
-          const currentSec = outTimeMicro / 1000000;
-          const totalSec = currentJob.video.duration;
-          const pct = Math.min(99, Math.max(1, Math.round((currentSec / totalSec) * 100)));
-          currentJob.processingProgress = pct;
-
-          const elapsedSec = Math.max(1, Math.round((Date.now() - startTime) / 1000));
-          currentJob.elapsedTimeSec = elapsedSec;
-
-          const estimatedRemaining = Math.max(0, Math.round((elapsedSec / (pct / 100)) - elapsedSec));
-          currentJob.estimatedRemainingSec = estimatedRemaining;
-        }
-      }
-    }
-  });
-
-  ffmpegProcess.stderr.on('data', (data) => {
-    stderrBuffer += data.toString();
-    // Keep last 4000 characters of stderr
-    if (stderrBuffer.length > 8000) {
-      stderrBuffer = stderrBuffer.slice(-4000);
-    }
-  });
-
-  ffmpegProcess.on('close', (code) => {
-    activeProcessingJobs = Math.max(0, activeProcessingJobs - 1);
-    const totalTimeSec = Math.max(1, Math.round((Date.now() - startTime) / 1000));
-
-    if (code === 0 && fs.existsSync(outputVideoPath)) {
-      const stat = fs.statSync(outputVideoPath);
-      currentJob.status = 'completed';
-      currentJob.processingProgress = 100;
-      currentJob.totalProcessingTimeSec = totalTimeSec;
-      currentJob.elapsedTimeSec = totalTimeSec;
-      currentJob.estimatedRemainingSec = 0;
-      currentJob.outputFilename = outputFileName;
-      currentJob.outputUrl = `/api/jobs/${currentJob.id}/download`;
-      currentJob.outputSize = stat.size;
-      currentJob.completedAt = new Date().toISOString();
-
-      // Update user count
-      const u = users.get(currentJob.userId);
-      if (u) u.totalJobs++;
-
-      console.log(`[FFmpeg] Finished Job ${currentJob.id} in ${totalTimeSec}s`);
-    } else {
-      currentJob.status = 'failed';
-      currentJob.errorMessage = 'Processing failed. Please try again with a valid video.';
-      failedJobLogs.set(currentJob.id, stderrBuffer);
-      console.error(`[FFmpeg] Failed Job ${currentJob.id} with exit code ${code}`);
-    }
-
-    // Update remaining queue positions
-    updateQueuePositions();
-
-    // Trigger next job immediately
-    setTimeout(processNextInQueue, 50);
-  });
+  // Video processing is handled client-side directly by the user's browser,
+  // preventing server bandwidth consumption and video file storage.
+  updateQueuePositions();
 }
 
 function updateQueuePositions() {
@@ -919,8 +768,8 @@ async function startServer() {
     }
   });
 
-  // Video Upload & FFprobe Analysis
-  app.post('/api/upload', upload.single('video'), async (req: Request, res: Response) => {
+  // Video Metadata Registration (Client-direct processing: zero video files transferred to server)
+  app.post('/api/upload', (req: Request, res: Response) => {
     try {
       const user = getOrCreateUser(req);
 
@@ -932,55 +781,23 @@ async function startServer() {
         return res.status(403).json({ error: 'Access required. Please request access from the administrator.' });
       }
 
-      if (!req.file) {
-        return res.status(400).json({ error: 'No video file provided.' });
-      }
-
-      const filePath = req.file.path;
-      const fileSize = req.file.size;
-
-      // Validate size against settings
-      if (fileSize > settings.maxVideoSizeMB * 1024 * 1024) {
-        fs.unlinkSync(filePath);
-        return res.status(400).json({
-          error: `File size (${Math.round(fileSize / 1024 / 1024)}MB) exceeds maximum allowed limit (${settings.maxVideoSizeMB}MB).`,
-        });
-      }
-
-      // Analyze video with ffprobe
-      const meta = await probeVideo(filePath);
-
-      // Validate duration
-      if (meta.duration > settings.maxVideoDurationSec) {
-        fs.unlinkSync(filePath);
-        return res.status(400).json({
-          error: `Video duration (${meta.duration}s) exceeds maximum allowed limit (${settings.maxVideoDurationSec}s).`,
-        });
-      }
-
+      const { filename, originalName, fileSize, duration, width, height, fps, format, url } = req.body || {};
       const videoMetadata: VideoMetadata = {
         id: crypto.randomBytes(8).toString('hex'),
-        filename: req.file.filename,
-        originalName: req.file.originalname,
-        fileSize,
-        duration: meta.duration,
-        width: meta.width,
-        height: meta.height,
-        fps: meta.fps,
-        format: meta.format,
-        codec: meta.codec,
-        audioCodec: meta.audioCodec,
-        audioSampleRate: meta.audioSampleRate,
-        url: `/storage/uploads/${req.file.filename}`,
+        filename: filename || originalName || 'video.mp4',
+        originalName: originalName || filename || 'video.mp4',
+        fileSize: fileSize || 0,
+        duration: duration || 10,
+        width: width || 1920,
+        height: height || 1080,
+        fps: fps || 30,
+        format: format || 'video/mp4',
+        url: url || '',
       };
 
       res.json({ success: true, video: videoMetadata });
     } catch (err: any) {
-      console.error('Upload analysis error:', err);
-      if (req.file?.path && fs.existsSync(req.file.path)) {
-        try { fs.unlinkSync(req.file.path); } catch (e) {}
-      }
-      res.status(500).json({ error: 'Failed to analyze video. Please ensure it is a valid media format.' });
+      res.status(500).json({ error: 'Failed to process video metadata.' });
     }
   });
 
@@ -1096,6 +913,33 @@ async function startServer() {
       return res.status(404).json({ error: 'Job not found' });
     }
     res.json({ job });
+  });
+
+  // Client Job Progress Sync (Metadata only - zero video transfer)
+  app.post('/api/jobs/:id/sync', (req: Request, res: Response) => {
+    const job = jobs.get(req.params.id);
+    if (!job) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+    const { status, processingProgress, elapsedTimeSec, estimatedRemainingSec, totalProcessingTimeSec, outputSize } = req.body || {};
+    if (status) job.status = status;
+    if (typeof processingProgress === 'number') job.processingProgress = processingProgress;
+    if (typeof elapsedTimeSec === 'number') job.elapsedTimeSec = elapsedTimeSec;
+    if (typeof estimatedRemainingSec === 'number') job.estimatedRemainingSec = estimatedRemainingSec;
+    if (typeof totalProcessingTimeSec === 'number') job.totalProcessingTimeSec = totalProcessingTimeSec;
+    if (typeof outputSize === 'number') job.outputSize = outputSize;
+
+    if (status === 'completed') {
+      job.completedAt = new Date().toISOString();
+      const user = users.get(job.userId);
+      if (user) {
+        user.totalJobs = (user.totalJobs || 0) + 1;
+        user.lastActive = new Date().toISOString();
+        saveUsers();
+      }
+    }
+    updateQueuePositions();
+    res.json({ success: true, job });
   });
 
   // Download Completed Video

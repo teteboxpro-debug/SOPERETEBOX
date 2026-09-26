@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { UploadCloud, CheckCircle2, Film, AlertCircle, PlayCircle, RefreshCw } from 'lucide-react';
 import type { VideoMetadata } from '../types.js';
+import { registerLocalVideoFile } from '../utils/clientVideoProcessor.js';
 
 interface VideoUploadZoneProps {
   currentVideo: VideoMetadata | null;
@@ -51,57 +52,37 @@ export const VideoUploadZone: React.FC<VideoUploadZoneProps> = ({
       return;
     }
 
-    const formData = new FormData();
-    formData.append('video', file);
-
     try {
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api/upload');
+      const objectUrl = URL.createObjectURL(file);
+      const tempVideo = document.createElement('video');
+      tempVideo.preload = 'metadata';
+      tempVideo.playsInline = true;
+      tempVideo.muted = true;
+      tempVideo.src = objectUrl;
 
-      const adminToken = localStorage.getItem('etebox_admin_token');
-      if (adminToken) {
-        xhr.setRequestHeader('Authorization', `Bearer ${adminToken}`);
-      }
-      const clientId = localStorage.getItem('etebox_client_id');
-      if (clientId) {
-        xhr.setRequestHeader('x-client-id', clientId);
-      }
+      tempVideo.onloadedmetadata = () => {
+        const videoMetadata: VideoMetadata = {
+          id: 'local_' + Math.random().toString(36).substring(2, 10),
+          filename: file.name,
+          originalName: file.name,
+          fileSize: file.size,
+          duration: Math.round(tempVideo.duration) || 10,
+          width: tempVideo.videoWidth || 1920,
+          height: tempVideo.videoHeight || 1080,
+          fps: 30,
+          format: file.type || 'video/mp4',
+          url: objectUrl,
+        };
 
-      xhr.upload.onprogress = (event) => {
-        if (event.lengthComputable) {
-          // Upload progress handled via parent or internal state
-        }
+        registerLocalVideoFile(videoMetadata.id, file);
+        onVideoSelected(videoMetadata);
       };
 
-      xhr.onload = () => {
-        if (xhr.status === 200) {
-          try {
-            const data = JSON.parse(xhr.responseText);
-            if (data.success && data.video) {
-              onVideoSelected(data.video);
-            } else {
-              setErrorMessage(data.error || 'Failed to process video.');
-            }
-          } catch (e) {
-            setErrorMessage('Invalid server response during video upload.');
-          }
-        } else {
-          try {
-            const data = JSON.parse(xhr.responseText);
-            setErrorMessage(data.error || `Upload failed with status ${xhr.status}`);
-          } catch {
-            setErrorMessage(`Upload failed with status ${xhr.status}`);
-          }
-        }
+      tempVideo.onerror = () => {
+        setErrorMessage('Failed to read video metadata from the selected file.');
       };
-
-      xhr.onerror = () => {
-        setErrorMessage('Network error during video upload.');
-      };
-
-      xhr.send(formData);
     } catch (err: any) {
-      setErrorMessage(err.message || 'Error uploading file.');
+      setErrorMessage(err.message || 'Error processing local video file.');
     }
   };
 
